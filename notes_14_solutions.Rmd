@@ -1,0 +1,317 @@
+---
+title: "Simulation-based inference - confidence intervals"
+author: ""
+date: ""
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      comment = "#>", highlight = TRUE,
+                      fig.align = "center")
+```
+
+## Main ideas
+
+- Understand sample statistic variability
+
+- Bootstrap idea and how to use it
+
+- Generating bootstrap confidence intervals
+
+- Correctly interpret confidence intervals
+  
+# Packages
+
+```{r packages}
+library(tidyverse)
+library(infer)
+```
+
+# Data
+
+Consider 20 1-bedroom apartments that were randomly selected on 
+Craigslist Manhattan from apartments listed as "by owner".
+
+```{r data_manhattan}
+manhattan <- read_csv("data/manhattan.csv")
+```
+
+Consider 3-10 day survival of mice randomized to various
+neutron doses and streptomycin therapy or saline control.
+
+```{r data_mice}
+mice <- read_table("http://users.stat.ufl.edu/~winner/data/micerad.dat",
+                   col_names = FALSE) %>% 
+  rename(dose = X1, treat = X2, died = X3)
+```
+
+# Notes
+
+## Variability of sample statistics
+
+Suppose the following represents the population of IQ scores. There are only
+1000 individuals in our population.
+
+```{r population_iq_distribution}
+population <- tibble(iq = rnorm(n = 1000, mean = 100, sd = 10))
+
+population %>% 
+  ggplot(aes(x = iq)) +
+  geom_histogram(binwidth = 5, fill = "grey90", color = "blue") +
+  labs(x = "IQ scores") +
+  theme_bw()
+```
+
+Take a sample with `slice_sample()` and compute the mean.
+
+```{r sample_iq_scores}
+population %>% 
+  slice_sample(n = 30) %>% 
+  summarise(mean_iq = mean(iq))
+```
+
+Did everyone get the same value? If fact, each time you sample (run the above
+code chunk) you will most likely get a slightly different mean.
+
+The mean is not unique to this phenomenon. There will be variability for
+all of the sample statistics we'll be using to produce confidence intervals.
+
+If we want to construct a confidence interval for a population mean (or
+any other parameter), we need to come up with a plausible range of values around 
+our observed sample mean (statistic). This range will depend on how precise and 
+how accurate our sample mean (statistic) is as an estimate of the population 
+mean (parameter). Quantifying this requires a measurement of how much we would 
+expect the sample mean (statistic) to vary from sample to sample.
+
+## Confidence intervals via bootstrap simulation
+
+To ensure reproducibility for your knitted document, set the random number
+generation seed.
+
+```{r set_seed}
+set.seed(1902370)
+```
+
+### A confidence interval for the population mean - $\mu$
+
+Create a 95% bootstrap confidence interval for the population *mean* price of
+1-bedroom apartments in Manhattan.
+
+First, identify the following:
+
+- Population: All 1-bedroom apartments in Manhattan
+- Parameter of interest: $\mu$
+- Sample: 20 rent values for 1-bedroom apartments in Manhattan
+- Sample size: 20
+
+To create our confidence interval, we'll follow the four-step bootstrap
+scheme outlined in the slides using functions from `infer`.
+
+1. **Take a bootstrap sample** - a random sample taken with replacement 
+   from the original sample, of the same size as the original sample.
+
+2. **Calculate the bootstrap statistic** - a statistic such as mean, median,
+   proportion, slope, etc. computed from the bootstrap samples.
+
+3. **Repeat steps (1) and (2) many times to create a bootstrap distribution** - 
+   a distribution of bootstrap statistics.
+
+4. **Calculate the bounds of the XX% confidence interval** as the middle XX% 
+   of the bootstrap distribution.
+   
+#### `infer`
+
+First, `specify()` the variable of interest, in this case `rent`.
+
+```{r specify_manhattan}
+manhattan %>% 
+  specify(response = rent)
+```
+
+Second, `generate()` a fixed number of bootstrap samples. Here we'll generate
+10,000 bootstrap samples. Generally, the smaller your sample size, the more
+bootstrap samples you'll want to generate. 
+
+```{r generate_manhattan}
+manhattan %>% 
+  specify(response = rent) %>% 
+  generate(reps = 10000, type = "bootstrap")
+```
+
+Finally, `calculate()` the relevant statistic for each bootstrap sample.
+
+```{r calculate_manhattan}
+boot_means <- manhattan %>% 
+  specify(response = rent) %>% 
+  generate(reps = 10000, type = "bootstrap") %>% 
+  calculate(stat = "mean")
+
+boot_means
+```
+
+Typically, you will do this all in one code chunk as is given in the chunk
+named `calculate`. It is broken up here to better understand the steps.
+
+Visualize `boot_means` with `ggplot()`.
+
+```{r visualize_means_manhattan}
+boot_means %>% 
+  ggplot(aes(x = stat)) +
+  geom_histogram(binwidth = 50)
+```
+
+Finally, compute the lower and upper bounds to form our interval estimate.
+For a 95% confidence interval, these bounds occur at the 2.5% and 97.5% 
+quantiles.
+
+```{r ci_rent_dplyr}
+boot_means %>% 
+  summarise(
+    lb = quantile(stat, 0.025),
+    ub = quantile(stat, 0.975)
+  )
+```
+
+Package `infer` also has a convenient function to do this: `get_ci()`. Use
+whichever method you prefer.
+
+```{r ci_rent_infer}
+get_ci(boot_means, level = 0.95)
+```
+
+What does this mean?
+
+**Interpretation**: We are 95% confident that the interval (2,298, 2,979)
+covers the true population mean rent cost of 1-bedroom apartments in Manhattan.
+
+What was the mean rent from the original sample?
+
+```{r}
+manhattan %>% 
+  summarise(mean_rent = mean(rent))
+```
+
+
+#### Practice
+
+Use `infer` functions to create a 98% bootstrap confidence interval for the 
+population *median* price of 1-bedroom apartments in Manhattan. Do this in a
+single code chunk. Provide an interpretation of your result.
+
+```{r practice_1}
+manhattan %>% 
+  specify(response = rent) %>% 
+  generate(reps = 10000, type = "bootstrap") %>% 
+  calculate(stat = "median") %>% 
+  get_ci(level = 0.98)
+```
+
+We are 98% confident that the median price of 1-bedroom apartments in Manhattan
+is captured by the interval (2,150, 3,234).
+
+What if we change the confidence level?
+
+As the confidence level increases, what happens to the width of the confidence
+interval? The width should increase.
+
+```{r}
+get_ci(boot_means, level = 0.01)
+get_ci(boot_means, level = 0.10)
+get_ci(boot_means, level = 0.25)
+get_ci(boot_means, level = 0.50)
+get_ci(boot_means, level = 0.90)
+get_ci(boot_means, level = 0.99)
+```
+
+As the sample size increases, the width of the confidence interval will decrease,
+all else held constant.
+
+### A confidence interval for the population proportion - $p$
+
+Consider the mice radiation dataset. Suppose we want to compute a 95% confidence
+interval for the proportion of mice that died while not on the treatment,
+regardless of the dose.
+
+First, identify the following:
+
+- Population: All mice exposed to radiation while not on a treatment
+- Parameter of interest: Proportion of mice that died
+- Sample: Subset of mice exposed to radiation while not on a treatment
+- Sample size: 261
+
+Observed sample proportion
+
+```{r}
+mice %>% 
+  filter(treat == 0) %>% 
+  mutate(died = if_else(died == 1, "yes", "no")) %>% 
+  specify(response = died, success = "yes") %>% 
+  calculate(stat = "prop")
+```
+
+
+```{r boot_mice}
+boot_prop <- mice %>% 
+  filter(treat == 0) %>% 
+  mutate(died = if_else(died == 1, "yes", "no")) %>% 
+  specify(response = died, success = "yes") %>% 
+  generate(reps = 10000, type = "bootstrap") %>% 
+  calculate(stat = "prop")
+```
+
+```{r ci_mice}
+ci_mice_died <- get_ci(boot_prop, level = .95)
+ci_mice_died
+```
+
+What does this mean?
+
+**Interpretation**: We are 95% confident that the proportion of mice that
+die while exposed to radiation and not on a treatment is captured by 
+(0.69, 0.79).
+
+```{r visualize_ci_mice}
+visualise(boot_prop) +
+  shade_ci(ci_mice_died) +
+  labs(x = "Sample proportion")
+```
+
+#### Practice
+
+Consider the mice radiation results. Suppose we want to compute a 90% confidence
+interval for the proportion of mice that lived while on the treatment,
+regardless of the dose.
+
+```{r practice_2_bootstrap}
+boot_prop_live <- mice %>%
+  filter(treat == 1) %>%
+  mutate(died = if_else(died == 0, "no", "yes")) %>%
+  specify(response = died, success = "no") %>%
+  generate(reps = 10000, type = "bootstrap") %>%
+  calculate(stat = "prop")
+```
+
+```{r practice_2_ci}
+ci_mice_live <- get_ci(boot_prop_live)
+ci_mice_live
+```
+
+```{r practice_2_visualize}
+visualise(boot_prop_live) +
+  shade_ci(ci_mice_live)
+```
+
+
+Give an interpretation of your result.
+
+We are 90% confident that the true proportion of mice that survive while on
+a treatment when exposed to radiation is captured by the interval (0.54, 0.66).
+
+# References
+
+1. Source: C.W. Hammond, et al. (1955). "The Effect of Streptomycin Therapy
+   on Mice Irradiated with Fast Neutrons", Radiation Research, Vol2,#4,
+   pp.354-360
